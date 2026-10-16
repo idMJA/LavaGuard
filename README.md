@@ -1,4 +1,4 @@
-# LavaGuard 🌋
+# LavaGuard
 
 LavaGuard started as an evolution of ideas from `LavaTools`. Initially, LavaTools was built as an all-in-one utility suite. But looking closely at the Lavalink ecosystem, the biggest pain points always came down to two things: YouTube's cipher throttling (`n-sig`) and BotGuard integrity verification.
 
@@ -28,13 +28,28 @@ No bloat, no multi-hundred megabyte browser instances, sub-millisecond execution
 - **Rust** (1.80+) & Cargo
 - **Bun** (used during compilation to bundle TypeScript solver routines into `OUT_DIR`)
 
-### Quick Start
+### Direct Setup
 ```bash
 # 1. Install solver AST dependencies
 bun install --production
 
 # 2. Run LavaGuard
 cargo run --release
+```
+
+### Docker Setup
+```bash
+# Run prebuilt image from GitHub Container Registry
+docker run -d \
+  --name lavaguard \
+  -p 20015:20015 \
+  -v ./config.toml:/app/config.toml \
+  ghcr.io/idmja/lavaguard:latest
+```
+
+Or using Docker Compose:
+```bash
+docker compose up -d
 ```
 
 By default, the server runs on `http://127.0.0.1:20015`.
@@ -198,6 +213,19 @@ This fetches the latest AST matchers, patches them for Rust compatibility, and r
 
 ---
 
+## Credits & Acknowledgments
+
+LavaGuard stands on the shoulders of continuous reverse engineering efforts from the community:
+
+- **[yt-dlp/ejs](https://github.com/yt-dlp/ejs)**: Core AST-based YouTube signature deciphering routines and player script extraction.
+- **[LuanRT/BgUtils](https://github.com/LuanRT/BgUtils)**: Pioneering reverse engineering of YouTube BotGuard and Google Web Anti-Abuse (WAA) challenge verification.
+- **[ashton045/webpo-generator](https://github.com/ashton045/webpo-generator)**: Reference HTTP service architecture and challenge fallback strategies.
+- **[kikkia/yt-cipher](https://github.com/kikkia/yt-cipher)**: Original remote cipher server concept for Lavalink/NodeLink.
+- **[WebReflection/linkedom](https://github.com/WebReflection/linkedom)**: Ultra-fast, lightweight DOM implementation enabling headless browser simulation without Node.js runtime bloat.
+
+---
+
 ## License
 
 MIT
+

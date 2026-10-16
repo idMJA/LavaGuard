@@ -575,7 +575,9 @@ mod tests {
         };
 
         assert_eq!(
-            mgr.normalize_player_url("https://www.youtube.com/s/player/2574220e/player_ias.vflset/en_US/base.js"),
+            mgr.normalize_player_url(
+                "https://www.youtube.com/s/player/2574220e/player_ias.vflset/en_US/base.js"
+            ),
             "https://www.youtube.com/s/player/2574220e/player_ias.vflset/en_US/base.js"
         );
 
@@ -601,7 +603,9 @@ mod tests {
         };
 
         assert_eq!(
-            mgr.normalize_player_url("https://www.youtube.com/s/player/original/player_tcl.vflset/en_US/base.js"),
+            mgr.normalize_player_url(
+                "https://www.youtube.com/s/player/original/player_tcl.vflset/en_US/base.js"
+            ),
             "https://www.youtube.com/s/player/override123/player_ias.vflset/en_US/base.js"
         );
     }

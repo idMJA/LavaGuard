@@ -1,0 +1,10 @@
+services:
+  lavaguard:
+    build: .
+    image: ghcr.io/idmja/lavaguard:latest
+    container_name: lavaguard
+    restart: unless-stopped
+    ports:
+      - "20015:20015"
+    volumes:
+      - ./config.toml:/app/config.toml
