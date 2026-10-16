@@ -1,0 +1,24 @@
+{
+  "name": "lavaguard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run build.ts",
+    "update": "bun run scripts/update-ejs.ts",
+    "format": "biome format --write ./solver ./scripts build.ts",
+    "lint": "biome check ./solver ./scripts build.ts",
+    "lint:fix": "biome check --write --unsafe ./solver ./scripts build.ts"
+  },
+  "dependencies": {
+    "astring": "^1.9.0",
+    "linkedom": "^0.18.13",
+    "meriyah": "^7.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

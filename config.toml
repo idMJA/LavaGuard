@@ -1,0 +1,11 @@
+[server]
+host = "127.0.0.1"
+port = 20015
+auth_key = ""
+
+[youtube]
+base_url = "https://www.youtube.com"
+override_player_variant = ""
+override_player_id = ""
+
+
