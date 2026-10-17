@@ -1,10 +1,10 @@
 # LavaGuard
 
-LavaGuard started as an evolution of ideas from `LavaTools`. Initially, LavaTools was built as an all-in-one utility suite. But looking closely at the Lavalink ecosystem, the biggest pain points always came down to two things: YouTube's cipher throttling (`n-sig`) and BotGuard integrity verification.
+LavaGuard started as an evolution of ideas from [`LavaTools`](https://github.com/idMJA/LavaTools). Initially, LavaTools was built as an all-in-one utility suite. But looking closely at the Lavalink ecosystem, the biggest pain points always came down to two things: YouTube's cipher throttling (`n-sig`) and BotGuard integrity verification.
 
-Tools like `yt-cipher` (Deno) and `webpo-generator` (Node) each solve a slice of the problem, but they require heavy runtimes, separate services, and high memory footprints. 
+Tools like [`yt-cipher`](https://github.com/kikkia/yt-cipher) (Deno) and [`webpo-generator`](https://github.com/ashton045/webpo-generator) (Node) each solve a slice of the problem, but they require heavy runtimes, separate services, and high memory footprints. 
 
-That sparked a question: **What if we combine both into a single, low-level binary written in Rust?** 
+That sparked a question: **What if I combine both into a single, low-level binary written in Rust?** 
 
 No bloat, no multi-hundred megabyte browser instances, sub-millisecond execution, and rock-solid memory efficiency. That's why LavaGuard was created.
 

@@ -579,16 +579,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
  "regex",
  "reqwest",
  "rquickjs",
  "serde",
  "serde_json",
- "thiserror",
  "tokio",
  "toml",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -1429,7 +1426,6 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
  "url",
 ]
 

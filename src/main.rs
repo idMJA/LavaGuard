@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_crate_versions)]
+
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -14,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "lavaguard=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "lavaguard=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();

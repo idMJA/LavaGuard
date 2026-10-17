@@ -1,57 +1,22 @@
-use rquickjs::{Context, Function, Object, Runtime};
-use serde::{Deserialize, Serialize};
+#![allow(clippy::multiple_crate_versions)]
+
+mod bridge;
+mod player;
+pub mod types;
+mod url_solver;
+mod worker;
+
+pub use types::{BotguardResult, SolveResult};
+
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
-static PLAYER_ID_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-static PLAYER_VARIANT_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-static STS_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-
-const SOLVER_BUNDLE: &str = include_str!(concat!(env!("OUT_DIR"), "/cipher.bundle.js"));
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SolveResult {
-    pub mode: String,
-    pub n: Option<String>,
-    pub sig: Option<String>,
-    pub resolved_url: Option<String>,
-}
-
-#[allow(clippy::enum_variant_names)]
-enum WorkerMessage {
-    SolveCipher {
-        player_code: Arc<String>,
-        n_param: Option<String>,
-        sig: Option<String>,
-        respond_to: oneshot::Sender<anyhow::Result<SolveResult>>,
-    },
-    SolveEval {
-        player_code: String,
-        stream_url: String,
-        respond_to: oneshot::Sender<anyhow::Result<String>>,
-    },
-    SolveBotguard {
-        content_binding: String,
-        cold_token: bool,
-        respond_to: oneshot::Sender<anyhow::Result<BotguardResult>>,
-    },
-    DecodeColdStart {
-        token: String,
-        respond_to: oneshot::Sender<anyhow::Result<serde_json::Value>>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BotguardResult {
-    #[serde(rename = "poToken")]
-    pub po_token: String,
-    #[serde(rename = "contentBinding")]
-    pub content_binding: String,
-    #[serde(rename = "coldStartToken", skip_serializing_if = "Option::is_none")]
-    pub cold_start_token: Option<String>,
-    pub ttl: u64,
-}
+use crate::config::Config;
+use player::{normalize_player_url, parse_sts_timestamp};
+use types::WorkerMessage;
+use url_solver::assemble_stream_url;
+use worker::start_worker_thread;
 
 #[derive(Clone)]
 pub struct CipherManager {
@@ -60,247 +25,13 @@ pub struct CipherManager {
     sts_cache: Arc<RwLock<HashMap<String, String>>>,
     pot_cache: Arc<RwLock<HashMap<String, (BotguardResult, std::time::Instant)>>>,
     worker_tx: mpsc::Sender<WorkerMessage>,
-    config: Arc<crate::config::Config>,
+    config: Arc<Config>,
 }
 
 impl CipherManager {
-    pub fn new(config: Arc<crate::config::Config>) -> anyhow::Result<Self> {
-        let (tx, mut rx) = mpsc::channel::<WorkerMessage>(64);
-
-        std::thread::Builder::new()
-            .name("quickjs-worker".into())
-            .spawn(move || {
-                let runtime = match Runtime::new() {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        tracing::error!("failed creating quickjs runtime: {e}");
-                        return;
-                    }
-                };
-
-                let context = match Context::full(&runtime) {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        tracing::error!("failed creating quickjs context: {e}");
-                        return;
-                    }
-                };
-
-                let eval_res = context.with(|ctx| {
-                    if let Err(e) = ctx.eval::<(), _>(
-                        r#"
-                        if (typeof globalThis.structuredClone !== 'function') {
-                            globalThis.structuredClone = function(obj) {
-                                return JSON.parse(JSON.stringify(obj));
-                            };
-                        }
-                        if (typeof globalThis.setTimeout !== 'function') {
-                            globalThis.setTimeout = function(fn, ms) {
-                                return 1;
-                            };
-                            globalThis.clearTimeout = function(id) {};
-                        }
-                    "#,
-                    ) {
-                        return Err(format!("failed installing polyfills: {e}"));
-                    }
-
-                    let globals = ctx.globals();
-                    let fetch_ctx = ctx.clone();
-                    let native_fetch = Function::new(
-                        ctx.clone(),
-                        move |url: String, opts: Option<Object>| -> rquickjs::Result<Object> {
-                            let mut method = "GET".to_string();
-                            let mut req_body: Option<String> = None;
-                            let mut req_headers: Vec<(String, String)> = Vec::new();
-
-                            if let Some(o) = opts {
-                                if let Ok(m) = o.get::<_, String>("method") {
-                                    method = m.to_uppercase();
-                                }
-                                if let Ok(b) = o.get::<_, String>("body") {
-                                    req_body = Some(b);
-                                }
-                                if let Ok(h) = o.get::<_, Object>("headers") {
-                                    for k in h.keys::<String>().flatten() {
-                                        if let Ok(v) = h.get::<_, String>(&k) {
-                                            req_headers.push((k, v));
-                                        }
-                                    }
-                                }
-                            }
-
-                            let mut request = match method.as_str() {
-                                "POST" => ureq::post(&url),
-                                "PUT" => ureq::put(&url),
-                                "HEAD" => ureq::head(&url),
-                                _ => ureq::get(&url),
-                            };
-
-                            for (k, v) in req_headers {
-                                request = request.set(&k, &v);
-                            }
-
-                            let resp_result = if let Some(b) = req_body {
-                                request.send_string(&b)
-                            } else {
-                                request.call()
-                            };
-
-                            let (status, status_text, body_text) = match resp_result {
-                                Ok(resp) => {
-                                    let status = resp.status();
-                                    let status_text = resp.status_text().to_string();
-                                    let text = resp.into_string().unwrap_or_default();
-                                    (status, status_text, text)
-                                }
-                                Err(ureq::Error::Status(code, resp)) => {
-                                    let text = resp.into_string().unwrap_or_default();
-                                    (code, format!("HTTP Error {code}"), text)
-                                }
-                                Err(_) => {
-                                    return Err(rquickjs::Error::Exception);
-                                }
-                            };
-
-                            let resp_obj = Object::new(fetch_ctx.clone())?;
-                            resp_obj.set("status", status)?;
-                            resp_obj.set("statusText", status_text)?;
-                            resp_obj.set("ok", (200..300).contains(&status))?;
-                            resp_obj.set("bodyText", body_text)?;
-
-                            Ok(resp_obj)
-                        },
-                    )
-                    .map_err(|e| format!("failed creating native fetch function: {e}"))?;
-                    globals
-                        .set("__native_fetch_sync", native_fetch)
-                        .map_err(|e| format!("failed setting native fetch global: {e}"))?;
-
-                    if let Err(e) = ctx.eval::<(), _>(
-                        r#"
-                        globalThis.fetch = async function(url, options) {
-                            const res = globalThis.__native_fetch_sync(String(url), options || {});
-                            return {
-                                status: res.status,
-                                statusText: res.statusText,
-                                ok: res.ok,
-                                text: async () => res.bodyText,
-                                json: async () => JSON.parse(res.bodyText)
-                            };
-                        };
-                    "#,
-                    ) {
-                        return Err(format!("failed installing fetch polyfill: {e}"));
-                    }
-
-                    if let Err(e) = ctx.eval::<(), _>(SOLVER_BUNDLE) {
-                        let err_msg = if let Some(exc) = ctx.catch().as_exception() {
-                            format!("{e}: {exc}")
-                        } else {
-                            format!("{e}")
-                        };
-                        return Err(err_msg);
-                    }
-                    Ok(())
-                });
-
-                if let Err(e) = eval_res {
-                    tracing::error!("failed evaluating solver bundle: {e}");
-                    return;
-                }
-
-                while let Some(msg) = rx.blocking_recv() {
-                    match msg {
-                        WorkerMessage::SolveCipher {
-                            player_code,
-                            n_param,
-                            sig,
-                            respond_to,
-                        } => {
-                            let res = context.with(|ctx| -> anyhow::Result<SolveResult> {
-                                let solve_cipher_fn: Function =
-                                    ctx.globals().get("solve_cipher")?;
-                                let out: Object =
-                                    solve_cipher_fn.call((player_code.as_str(), n_param, sig))?;
-
-                                let mode: String = out.get("mode")?;
-                                let n: Option<String> = out.get("n")?;
-                                let sig: Option<String> = out.get("sig")?;
-                                let resolved_url: Option<String> = out.get("resolved_url")?;
-
-                                Ok(SolveResult {
-                                    mode,
-                                    n,
-                                    sig,
-                                    resolved_url,
-                                })
-                            });
-
-                            let _ = respond_to.send(res);
-                        }
-                        WorkerMessage::SolveEval {
-                            player_code,
-                            stream_url,
-                            respond_to,
-                        } => {
-                            let res = context.with(|ctx| -> anyhow::Result<String> {
-                                let solve_eval_fn: Function = ctx.globals().get("solve_eval")?;
-                                let out: Object = solve_eval_fn.call((player_code, stream_url))?;
-                                let resolved: String = out.get("resolved_url")?;
-                                Ok(resolved)
-                            });
-
-                            let _ = respond_to.send(res);
-                        }
-                        WorkerMessage::SolveBotguard {
-                            content_binding,
-                            cold_token,
-                            respond_to,
-                        } => {
-                            let res = context.with(|ctx| -> anyhow::Result<BotguardResult> {
-                                let solve_bg_fn: Function = ctx.globals().get("solve_botguard")?;
-                                let promise: rquickjs::Promise =
-                                    solve_bg_fn.call((content_binding, cold_token))?;
-                                let out: Object = promise.finish().map_err(|e| {
-                                    if let Some(err) = ctx.catch().as_exception() {
-                                        anyhow::anyhow!("QuickJS exception: {:?}", err.message())
-                                    } else {
-                                        anyhow::anyhow!("QuickJS error: {e}")
-                                    }
-                                })?;
-                                let po_token: String = out.get("poToken")?;
-                                let content_binding: String = out.get("contentBinding")?;
-                                let cold_start_token: Option<String> = out.get("coldStartToken")?;
-                                let ttl: u64 = out.get("ttl")?;
-                                Ok(BotguardResult {
-                                    po_token,
-                                    content_binding,
-                                    cold_start_token,
-                                    ttl,
-                                })
-                            });
-
-                            let _ = respond_to.send(res);
-                        }
-                        WorkerMessage::DecodeColdStart { token, respond_to } => {
-                            let res = context.with(|ctx| -> anyhow::Result<serde_json::Value> {
-                                let decode_fn: Function = ctx.globals().get("decode_cold_start")?;
-                                let out: Object = decode_fn.call((token,))?;
-                                let json_str: String = ctx
-                                    .globals()
-                                    .get::<_, Object>("JSON")?
-                                    .get::<_, Function>("stringify")?
-                                    .call((out,))?;
-                                let val: serde_json::Value = serde_json::from_str(&json_str)?;
-                                Ok(val)
-                            });
-
-                            let _ = respond_to.send(res);
-                        }
-                    }
-                }
-            })?;
+    pub fn new(config: Arc<Config>) -> anyhow::Result<Self> {
+        let (tx, rx) = mpsc::channel::<WorkerMessage>(64);
+        start_worker_thread(rx)?;
 
         Ok(Self {
             http_client: reqwest::Client::builder().build()?,
@@ -312,45 +43,12 @@ impl CipherManager {
         })
     }
 
+    #[must_use]
     pub fn normalize_player_url(&self, raw: &str) -> String {
-        let trimmed = raw.trim();
-        let base = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            trimmed.to_string()
-        } else if trimmed.starts_with('/') {
-            format!("https://www.youtube.com{trimmed}")
-        } else {
-            format!("https://www.youtube.com/{trimmed}")
-        };
-
-        let mut result = base;
-
-        if let Some(ref override_id) = self.config.youtube.override_player_id {
-            if !override_id.is_empty() {
-                let re = PLAYER_ID_REGEX
-                    .get_or_init(|| regex::Regex::new(r#"/player/[a-zA-Z0-9_-]+/"#).unwrap());
-                result = re
-                    .replace(&result, format!("/player/{override_id}/"))
-                    .into_owned();
-            }
-        }
-
-        if let Some(ref override_variant) = self.config.youtube.override_player_variant {
-            if !override_variant.is_empty() {
-                let variant_str = if override_variant.ends_with(".vflset") {
-                    override_variant.clone()
-                } else {
-                    format!("player_{}.vflset", override_variant.to_lowercase())
-                };
-                let re = PLAYER_VARIANT_REGEX
-                    .get_or_init(|| regex::Regex::new(r#"/([a-zA-Z0-9_-]+\.vflset)/"#).unwrap());
-                result = re.replace(&result, format!("/{variant_str}/")).into_owned();
-            }
-        }
-
-        result
+        normalize_player_url(raw, &self.config)
     }
 
-    pub async fn get_player(&self, player_url: &str) -> anyhow::Result<Arc<String>> {
+    async fn get_player(&self, player_url: &str) -> anyhow::Result<Arc<String>> {
         let normalized = self.normalize_player_url(player_url);
 
         {
@@ -372,9 +70,10 @@ impl CipherManager {
             .error_for_status()?;
 
         let body = Arc::new(resp.text().await?);
-
-        let mut cache = self.player_cache.write().await;
-        cache.insert(normalized, Arc::clone(&body));
+        self.player_cache
+            .write()
+            .await
+            .insert(normalized, Arc::clone(&body));
         Ok(body)
     }
 
@@ -389,23 +88,9 @@ impl CipherManager {
         }
 
         let player = self.get_player(&normalized).await?;
+        let sts = parse_sts_timestamp(&player)?;
 
-        let re = STS_REGEX
-            .get_or_init(|| regex::Regex::new(r#"(?:signatureTimestamp|sts):(\d+)"#).unwrap());
-        let sts = match re.captures(&player) {
-            Some(caps) => caps
-                .get(1)
-                .map(|m| m.as_str().to_string())
-                .ok_or_else(|| anyhow::anyhow!("sts regex group missing"))?,
-            None => {
-                return Err(anyhow::anyhow!(
-                    "could not find sts timestamp in player script"
-                ))
-            }
-        };
-
-        let mut cache = self.sts_cache.write().await;
-        cache.insert(normalized, sts.clone());
+        self.sts_cache.write().await.insert(normalized, sts.clone());
         Ok(sts)
     }
 
@@ -432,7 +117,7 @@ impl CipherManager {
             .map_err(|_| anyhow::anyhow!("cancelled from quickjs worker"))?
     }
 
-    pub async fn solve_eval(&self, player_url: &str, stream_url: &str) -> anyhow::Result<String> {
+    async fn solve_eval(&self, player_url: &str, stream_url: &str) -> anyhow::Result<String> {
         let player_code = self.get_player(player_url).await?;
         let (tx, rx) = oneshot::channel();
 
@@ -449,14 +134,49 @@ impl CipherManager {
             .map_err(|_| anyhow::anyhow!("cancelled from quickjs worker"))?
     }
 
+    pub async fn fetch_visitor_data(&self) -> anyhow::Result<String> {
+        let resp = self
+            .http_client
+            .post("https://www.youtube.com/youtubei/v1/visitor_id")
+            .header("content-type", "application/json")
+            .header(
+                "user-agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            .json(&serde_json::json!({
+                "context": {
+                    "client": {
+                        "clientName": "WEB",
+                        "clientVersion": "2.20260227.01.00"
+                    }
+                }
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let json: serde_json::Value = resp.json().await?;
+        let visitor = json
+            .pointer("/responseContext/visitorData")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("visitorData not found in response"))?;
+
+        Ok(visitor.to_string())
+    }
+
     pub async fn generate_pot(
         &self,
-        content_binding: &str,
+        content_binding: Option<&str>,
         cold_token: bool,
     ) -> anyhow::Result<BotguardResult> {
+        let binding = match content_binding {
+            Some(b) if !b.is_empty() => b.to_string(),
+            _ => self.fetch_visitor_data().await?,
+        };
+
         if !cold_token {
             let cache = self.pot_cache.read().await;
-            if let Some((cached, instant)) = cache.get(content_binding) {
+            if let Some((cached, instant)) = cache.get(&binding) {
                 if instant.elapsed().as_secs() < cached.ttl.saturating_sub(60) {
                     return Ok(cached.clone());
                 }
@@ -467,7 +187,7 @@ impl CipherManager {
 
         self.worker_tx
             .send(WorkerMessage::SolveBotguard {
-                content_binding: content_binding.to_string(),
+                content_binding: binding.clone(),
                 cold_token,
                 respond_to: tx,
             })
@@ -479,11 +199,10 @@ impl CipherManager {
             .map_err(|_| anyhow::anyhow!("cancelled from quickjs worker"))??;
 
         if !cold_token {
-            let mut cache = self.pot_cache.write().await;
-            cache.insert(
-                content_binding.to_string(),
-                (res.clone(), std::time::Instant::now()),
-            );
+            self.pot_cache
+                .write()
+                .await
+                .insert(binding, (res.clone(), std::time::Instant::now()));
         }
 
         Ok(res)
@@ -512,45 +231,27 @@ impl CipherManager {
         sig_key: Option<String>,
         n_param: Option<String>,
     ) -> anyhow::Result<(String, &'static str)> {
-        let mut parsed_url = url::Url::parse(stream_url)?;
+        let parsed_url = url::Url::parse(stream_url)?;
 
-        let pairs: Vec<(String, String)> = parsed_url
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
+        let target_n = n_param.or_else(|| {
+            parsed_url
+                .query_pairs()
+                .find(|(k, _)| k == "n")
+                .map(|(_, v)| v.into_owned())
+        });
 
-        let target_n =
-            n_param.or_else(|| pairs.iter().find(|(k, _)| k == "n").map(|(_, v)| v.clone()));
-
-        let target_sig =
-            enc_sig.or_else(|| pairs.iter().find(|(k, _)| k == "s").map(|(_, v)| v.clone()));
+        let target_sig = enc_sig.or_else(|| {
+            parsed_url
+                .query_pairs()
+                .find(|(k, _)| k == "s")
+                .map(|(_, v)| v.into_owned())
+        });
 
         let solved = self.solve_cipher(player_url, target_n, target_sig).await?;
 
         if solved.mode == "ejs" {
-            parsed_url.set_query(None);
-            let mut query = parsed_url.query_pairs_mut();
-            let sig_param_key = sig_key.as_deref().unwrap_or("sig");
-
-            for (k, v) in pairs {
-                if k == "s" {
-                    continue;
-                }
-                if k == "n" {
-                    if let Some(ref resolved_n) = solved.n {
-                        query.append_pair("n", resolved_n);
-                        continue;
-                    }
-                }
-                query.append_pair(&k, &v);
-            }
-
-            if let Some(ref resolved_sig) = solved.sig {
-                query.append_pair(sig_param_key, resolved_sig);
-            }
-
-            drop(query);
-            return Ok((parsed_url.to_string(), "ejs"));
+            let assembled = assemble_stream_url(stream_url, sig_key.as_deref(), &solved)?;
+            return Ok((assembled, "ejs"));
         }
 
         let fallback_url = self.solve_eval(player_url, stream_url).await?;
