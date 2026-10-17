@@ -5,6 +5,7 @@ node_modules
 target/
 out
 dist
+cipher.bundle.js
 *.tgz
 
 # code coverage

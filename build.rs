@@ -9,6 +9,13 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let bundle_path = out_dir.join("cipher.bundle.js");
 
+    let prebundled = PathBuf::from("cipher.bundle.js");
+    if prebundled.exists() {
+        std::fs::copy(&prebundled, &bundle_path).expect("copy prebundled cipher bundle");
+        println!("cargo:warning=using pre-bundled cipher.bundle.js");
+        return;
+    }
+
     let status = Command::new("bun")
         .args([
             "run",

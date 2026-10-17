@@ -83,6 +83,9 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      - name: Pre-bundle Cipher Script
+        run: bun run build.ts cipher.bundle.js
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
