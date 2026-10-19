@@ -56,7 +56,7 @@ pub fn start_worker_thread(mut rx: mpsc::Receiver<WorkerMessage>) -> anyhow::Res
 
 fn dispatch_message(context: &Context, msg: WorkerMessage) {
     match msg {
-        WorkerMessage::SolveCipher {
+        WorkerMessage::Cipher {
             player_code,
             n_param,
             sig,
@@ -81,7 +81,7 @@ fn dispatch_message(context: &Context, msg: WorkerMessage) {
 
             let _ = respond_to.send(res);
         }
-        WorkerMessage::SolveEval {
+        WorkerMessage::Eval {
             player_code,
             stream_url,
             respond_to,
@@ -95,7 +95,7 @@ fn dispatch_message(context: &Context, msg: WorkerMessage) {
 
             let _ = respond_to.send(res);
         }
-        WorkerMessage::SolveBotguard {
+        WorkerMessage::Botguard {
             content_binding,
             cold_token,
             respond_to,
@@ -119,21 +119,6 @@ fn dispatch_message(context: &Context, msg: WorkerMessage) {
                     cold_start_token,
                     ttl,
                 })
-            });
-
-            let _ = respond_to.send(res);
-        }
-        WorkerMessage::DecodeColdStart { token, respond_to } => {
-            let res = context.with(|ctx| -> anyhow::Result<serde_json::Value> {
-                let decode_fn: Function = ctx.globals().get("decode_cold_start")?;
-                let out: Object = decode_fn.call((token,))?;
-                let json_str: String = ctx
-                    .globals()
-                    .get::<_, Object>("JSON")?
-                    .get::<_, Function>("stringify")?
-                    .call((out,))?;
-                let val: serde_json::Value = serde_json::from_str(&json_str)?;
-                Ok(val)
             });
 
             let _ = respond_to.send(res);

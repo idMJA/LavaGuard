@@ -121,13 +121,23 @@ pub async fn handle_decode_cold_start(
     State(state): State<AppState>,
     Json(payload): Json<DecodeColdStartRequest>,
 ) -> ApiResponse<serde_json::Value> {
-    match state.cipher.decode_cold_start(&payload.token).await {
-        Ok(res) => Ok(Json(res)),
-        Err(e) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )),
-    }
+    tokio::task::spawn_blocking(move || state.cipher.decode_cold_start(&payload.token))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })
 }

@@ -6,6 +6,11 @@ static PLAYER_ID_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 static PLAYER_VARIANT_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 static STS_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
+/// Normalizes and transforms raw player URLs based on configuration overrides.
+///
+/// # Panics
+///
+/// Panics only if internal static regex initialization fails.
 pub fn normalize_player_url(raw: &str, config: &Config) -> String {
     let trimmed = raw.trim();
     let base = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -44,9 +49,18 @@ pub fn normalize_player_url(raw: &str, config: &Config) -> String {
     result
 }
 
+/// Parses the STS (signature timestamp) integer from player script contents.
+///
+/// # Panics
+///
+/// Panics only if internal static regex initialization fails.
+///
+/// # Errors
+///
+/// Returns an error if the regex match fails to find an STS timestamp.
 pub fn parse_sts_timestamp(player_script: &str) -> anyhow::Result<String> {
-    let re =
-        STS_REGEX.get_or_init(|| regex::Regex::new(r"(?:signatureTimestamp|sts):(\d+)").unwrap());
+    let re = STS_REGEX
+        .get_or_init(|| regex::Regex::new(r"(?:signatureTimestamp|sts)\s*:\s*(\d+)").unwrap());
     re.captures(player_script)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_string())

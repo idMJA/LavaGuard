@@ -2,6 +2,11 @@ use url::Url;
 
 use super::types::SolveResult;
 
+/// Assembles a final playable stream URL using resolved signature and n-parameters.
+///
+/// # Errors
+///
+/// Returns an error if the base stream URL cannot be parsed by `url::Url`.
 pub fn assemble_stream_url(
     stream_url: &str,
     sig_key: Option<&str>,

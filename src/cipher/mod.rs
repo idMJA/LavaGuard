@@ -1,9 +1,8 @@
-#![allow(clippy::multiple_crate_versions)]
-
 mod bridge;
-mod player;
+pub mod cold_start;
+pub mod player;
 pub mod types;
-mod url_solver;
+pub mod url_solver;
 mod worker;
 
 pub use types::{BotguardResult, SolveResult};
@@ -29,6 +28,11 @@ pub struct CipherManager {
 }
 
 impl CipherManager {
+    /// Creates a new `CipherManager` instance and spawns background JS worker threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `QuickJS` isolate thread runtime initialization fails.
     pub fn new(config: Arc<Config>) -> anyhow::Result<Self> {
         let (tx, rx) = mpsc::channel::<WorkerMessage>(64);
         start_worker_thread(rx)?;
@@ -77,6 +81,11 @@ impl CipherManager {
         Ok(body)
     }
 
+    /// Extracts the STS signature timestamp from a remote player script URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP fetch fails or no STS timestamp is present.
     pub async fn extract_sts(&self, player_url: &str) -> anyhow::Result<String> {
         let normalized = self.normalize_player_url(player_url);
 
@@ -94,6 +103,11 @@ impl CipherManager {
         Ok(sts)
     }
 
+    /// Solves `YouTube` cipher signatures and n-parameters via EJS or isolate fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the player script fetch fails or evaluation returns an exception.
     pub async fn solve_cipher(
         &self,
         player_url: &str,
@@ -104,7 +118,7 @@ impl CipherManager {
         let (tx, rx) = oneshot::channel();
 
         self.worker_tx
-            .send(WorkerMessage::SolveCipher {
+            .send(WorkerMessage::Cipher {
                 player_code,
                 n_param,
                 sig,
@@ -122,7 +136,7 @@ impl CipherManager {
         let (tx, rx) = oneshot::channel();
 
         self.worker_tx
-            .send(WorkerMessage::SolveEval {
+            .send(WorkerMessage::Eval {
                 player_code: (*player_code).clone(),
                 stream_url: stream_url.to_string(),
                 respond_to: tx,
@@ -134,6 +148,11 @@ impl CipherManager {
             .map_err(|_| anyhow::anyhow!("cancelled from quickjs worker"))?
     }
 
+    /// Fetches fresh `visitorData` directly from `YouTube` `InnerTube`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the network request fails or response does not contain `visitorData`.
     pub async fn fetch_visitor_data(&self) -> anyhow::Result<String> {
         let resp = self
             .http_client
@@ -164,6 +183,11 @@ impl CipherManager {
         Ok(visitor.to_string())
     }
 
+    /// Generates or retrieves a cached `BotGuard` Proof of Origin Token (PO Token).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `BotGuard` isolate runner fails or `visitorData` fetch fails.
     pub async fn generate_pot(
         &self,
         content_binding: Option<&str>,
@@ -186,7 +210,7 @@ impl CipherManager {
         let (tx, rx) = oneshot::channel();
 
         self.worker_tx
-            .send(WorkerMessage::SolveBotguard {
+            .send(WorkerMessage::Botguard {
                 content_binding: binding.clone(),
                 cold_token,
                 respond_to: tx,
@@ -208,21 +232,21 @@ impl CipherManager {
         Ok(res)
     }
 
-    pub async fn decode_cold_start(&self, token: &str) -> anyhow::Result<serde_json::Value> {
-        let (tx, rx) = oneshot::channel();
-
-        self.worker_tx
-            .send(WorkerMessage::DecodeColdStart {
-                token: token.to_string(),
-                respond_to: tx,
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("quickjs worker thread is dead"))?;
-
-        rx.await
-            .map_err(|_| anyhow::anyhow!("cancelled from quickjs worker"))?
+    /// Decodes a client cold-start token payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token cannot be decoded or deserialized.
+    pub fn decode_cold_start(&self, token: &str) -> anyhow::Result<serde_json::Value> {
+        let decoded = cold_start::decode_cold_start_token(token)?;
+        Ok(serde_json::to_value(decoded)?)
     }
 
+    /// Resolves an entire streaming URL by executing cipher transformations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deciphering fails or URL re-assembly fails.
     pub async fn resolve_stream_url(
         &self,
         player_url: &str,

@@ -21,26 +21,22 @@ pub struct BotguardResult {
     pub ttl: u64,
 }
 
-#[allow(clippy::enum_variant_names)]
+#[derive(Debug)]
 pub enum WorkerMessage {
-    SolveCipher {
+    Cipher {
         player_code: Arc<String>,
         n_param: Option<String>,
         sig: Option<String>,
         respond_to: oneshot::Sender<anyhow::Result<SolveResult>>,
     },
-    SolveEval {
+    Eval {
         player_code: String,
         stream_url: String,
         respond_to: oneshot::Sender<anyhow::Result<String>>,
     },
-    SolveBotguard {
+    Botguard {
         content_binding: String,
         cold_token: bool,
         respond_to: oneshot::Sender<anyhow::Result<BotguardResult>>,
-    },
-    DecodeColdStart {
-        token: String,
-        respond_to: oneshot::Sender<anyhow::Result<serde_json::Value>>,
     },
 }

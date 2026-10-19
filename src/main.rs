@@ -1,15 +1,8 @@
-#![allow(clippy::multiple_crate_versions)]
-
+use lavaguard::cipher::CipherManager;
+use lavaguard::config::load_config;
+use lavaguard::routes::{create_router, AppState};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-mod cipher;
-mod config;
-mod routes;
-
-use cipher::CipherManager;
-use config::load_config;
-use routes::{create_router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

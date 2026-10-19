@@ -8,7 +8,6 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct YoutubeConfig {
     pub base_url: Option<String>,
     pub override_player_id: Option<String>,

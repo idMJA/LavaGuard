@@ -82,43 +82,6 @@ export function utf8Decode(bytes: Uint8Array): string {
 	return s;
 }
 
-export function decodeColdStartToken(token: string) {
-	const packet = toUint8(token);
-
-	if (packet.length < 10 || packet[0] !== 34) {
-		throw new Error("invalid cold start token");
-	}
-
-	const length = packet[1];
-	if (length === undefined || packet.length !== length + 2 || length < 8) {
-		throw new Error("invalid cold start packet length");
-	}
-
-	const payload = packet.slice(2);
-	for (let i = 2; i < payload.length; i++) {
-		const k = payload[i % 2];
-		const curr = payload[i];
-		if (k !== undefined && curr !== undefined) {
-			payload[i] = curr ^ k;
-		}
-	}
-
-	const b4 = payload[4] ?? 0;
-	const b5 = payload[5] ?? 0;
-	const b6 = payload[6] ?? 0;
-	const b7 = payload[7] ?? 0;
-	const timestamp = ((b4 << 24) | (b5 << 16) | (b6 << 8) | b7) >>> 0;
-
-	return {
-		contentBinding: utf8Decode(payload.subarray(8)),
-		timestamp,
-		unknownVal: payload[2],
-		clientState: payload[3],
-		keys: [payload[0], payload[1]],
-		date: new Date(timestamp * 1000).toISOString(),
-	};
-}
-
 export function createColdStartToken(contentBinding: string, clientState = 1) {
 	const bytecode = utf8Encode(contentBinding);
 	if (bytecode.length > 247) return null;

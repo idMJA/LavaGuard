@@ -1,6 +1,6 @@
-import { type ESTree, parse } from "meriyah";
+import type { ESTree } from "meriyah";
+import { parse } from "meriyah";
 import { setupDom } from "./botguard/dom.ts";
-import { decodeColdStartToken } from "./botguard/helpers.ts";
 import { generatePoToken } from "./botguard/index.ts";
 import { extractArray } from "./ejs/nsig.ts";
 import { getFromPrepared, preprocessPlayer } from "./ejs/solvers.ts";
@@ -264,11 +264,6 @@ export async function solve_botguard(
 	return await generatePoToken(content_binding, cold_token);
 }
 
-export function decode_cold_start(token: string) {
-	return decodeColdStartToken(token);
-}
-
 (globalThis as Record<string, unknown>).solve_cipher = solve_cipher;
 (globalThis as Record<string, unknown>).solve_eval = solve_eval;
 (globalThis as Record<string, unknown>).solve_botguard = solve_botguard;
-(globalThis as Record<string, unknown>).decode_cold_start = decode_cold_start;
