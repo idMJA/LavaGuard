@@ -1,0 +1,4 @@
+# Ignore generated solver and scripts from GitHub Linguist language statistics
+solver/* linguist-vendored
+scripts/* linguist-vendored
+build.ts linguist-vendored
